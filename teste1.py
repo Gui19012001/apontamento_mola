@@ -21,42 +21,6 @@ TZ = pytz.timezone("America/Sao_Paulo")
 
 st.set_page_config(page_title="Apontamento MOLA", layout="wide")
 
-# ==============================
-# CSS VISUAL DARK
-# ==============================
-st.markdown("""
-    <style>
-        .block-container {padding-top: 1rem; padding-bottom: 0rem;}
-        header, footer {visibility: hidden;}
-        [data-testid="stSidebar"] {background-color: #111827;}
-        body {background-color: #0f172a; color: white;}
-        h1, h2, h3, h4 {color: white !important;}
-        .stTextInput>div>div>input {
-            background-color: #1e293b !important;
-            color: white !important;
-            border-radius: 10px;
-            height: 60px;
-            font-size: 18px;
-            text-align: center;
-            border: 2px solid #334155;
-        }
-        .contador-box {
-            background-color: #1e293b;
-            border-radius: 12px;
-            padding: 10px 20px;
-            text-align: center;
-            font-size: 22px;
-            color: #10b981;
-            margin-bottom: 10px;
-        }
-        .status-box {
-            background-color: #1e293b;
-            border-radius: 10px;
-            padding: 10px 20px;
-            font-size: 18px;
-        }
-    </style>
-""", unsafe_allow_html=True)
 
 
 # ==============================
