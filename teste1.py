@@ -88,6 +88,27 @@ def carregar_checklists():
         st.error(f"Erro ao carregar checklists: {e}")
         return pd.DataFrame()
 
+def salvar_checklist(numero_serie, respostas: dict, usuario: str):
+    """
+    Salva um checklist na tabela 'checklists'.
+    - numero_serie: str
+    - respostas: dict (ex.: {"ETIQUETA": {"status": "Conforme","obs": None}, ...})
+    - usuario: str
+    """
+    try:
+        payload = {
+            "numero_serie": numero_serie,
+            "usuario": usuario,
+            "data_hora": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            # Salva o dicionário de respostas como campo JSON (dependendo do seu schema supabase)
+            "respostas": respostas
+        }
+        supabase.table("checklists").insert(payload).execute()
+        # opcional: invalida cache se estiver usando caching custom
+        return True, None
+    except Exception as e:
+        return False, str(e)
+
 
 
 # ==============================
