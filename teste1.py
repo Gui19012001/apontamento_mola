@@ -7,11 +7,13 @@ from supabase import create_client
 from dotenv import load_dotenv
 from pathlib import Path
 import streamlit.components.v1 as components
+import time
+import json
 
 # ==============================
 # CONFIGURAÇÃO GERAL
 # ==============================
-env_path = Path(__file__).parent / "teste.env"  # Ajuste se necessário
+env_path = Path(__file__).parent / "teste.env"
 load_dotenv(dotenv_path=env_path)
 
 SUPABASE_URL = os.getenv("SUPABASE_URL")
@@ -22,18 +24,17 @@ TZ = pytz.timezone("America/Sao_Paulo")
 st.set_page_config(page_title="Apontamento MOLA", layout="wide")
 
 
-
 # ==============================
-# FUNÇÕES SUPABASE
+# FUNÇÕES SUPABASE - MOLA
 # ==============================
 def salvar_apontamento_mola(numero_serie: str, op: str, usuario: str):
     if not numero_serie or not op:
         return False, "Número de série e OP obrigatórios."
 
-    check = supabase.table("apontamentos_mola")\
-        .select("*")\
-        .eq("numero_serie", numero_serie)\
-        .eq("op", op)\
+    check = supabase.table("apontamentos_mola") \
+        .select("*") \
+        .eq("numero_serie", numero_serie) \
+        .eq("op", op) \
         .execute()
     if check.data:
         return False, f"Série {numero_serie} já apontada na OP {op}."
@@ -56,10 +57,10 @@ def salvar_apontamento_mola(numero_serie: str, op: str, usuario: str):
 @st.cache_data(ttl=10)
 def carregar_apontamentos():
     try:
-        data = supabase.table("apontamentos_mola")\
-            .select("*")\
-            .order("data_hora", desc=True)\
-            .limit(100)\
+        data = supabase.table("apontamentos_mola") \
+            .select("*") \
+            .order("data_hora", desc=True) \
+            .limit(100) \
             .execute()
         df = pd.DataFrame(data.data)
         if not df.empty:
@@ -78,6 +79,16 @@ def contar_apontamentos_hoje():
     df["data"] = df["data_hora"].dt.date
     return (df["data"] == hoje).sum()
 
+def carregar_checklists():
+    try:
+        response = supabase.table("checklists").select("*").execute()
+        df = pd.DataFrame(response.data)
+        return df
+    except Exception as e:
+        st.error(f"Erro ao carregar checklists: {e}")
+        return pd.DataFrame()
+
+
 
 # ==============================
 # CALLBACK DO LEITOR
@@ -87,12 +98,10 @@ def processar_leitura():
     if not leitura:
         return
 
-    # Se for número de série
     if len(leitura) == 9:
         st.session_state["numero_serie"] = leitura
         st.session_state["mensagem_erro"] = None
 
-    # Se for OP
     elif len(leitura) == 11:
         if not st.session_state.get("numero_serie"):
             st.session_state["mensagem_erro"] = "⚠️ Leia primeiro o número de série antes da OP!"
@@ -106,7 +115,6 @@ def processar_leitura():
             if sucesso:
                 st.session_state["sucesso_flag"] = True
                 st.session_state["mensagem_erro"] = None
-                # Zera os campos após salvar
                 st.session_state["numero_serie"] = ""
                 st.session_state["op"] = ""
             else:
@@ -115,8 +123,159 @@ def processar_leitura():
     st.session_state["input_leitor"] = ""
 
 
+# ================================
+# Conversão do status
+# ================================
+def status_emoji_para_texto(emoji):
+    mapa = {"✅": "Conforme", "❌": "Não Conforme", "🟡": "N/A"}
+    return mapa.get(emoji, "Indefinido")
+
+
+# ================================
+# Checklist de Qualidade (ATUALIZADO)
+# ================================
+def checklist_molas(numero_serie, usuario):
+    st.markdown(f"## ✔️ Checklist de Qualidade – Nº de Série: {numero_serie}")
+
+    # Controle de sessão
+    if "checklist_bloqueado" not in st.session_state:
+        st.session_state.checklist_bloqueado = False
+    if "checklist_cache" not in st.session_state:
+        st.session_state.checklist_cache = {}
+
+    perguntas = [
+        "Etiqueta do produto – As informações estão corretas / legíveis conforme modelo e gravação do eixo?",
+        "Placa do Inmetro está correta / fixada e legível? Número corresponde à viga?",
+        "A cor (Letra) do número de série é compatível com a etiqueta? Informe cor:",
+        "Os grampos estão conforme a estrutura? Informe dimensão:",
+        "Qual o feixe de mola utilizado?",
+        "A medida do entre centro dos feixes está correta?",
+        "Qual o comprimento do braço fixo utilizado?",
+        "Qual o comprimento do braço móvel utilizado?",
+        "Os parafusos dos braços estão apertados?",
+        "Tampa do cubo, pintura e graxeiras estão conforme?"
+    ]
+
+    item_keys = {
+        1: "ETIQUETA",
+        2: "PLACA_INMETRO",
+        3: "COR_DA_VIGA",
+        4: "GRAMPO",
+        5: "FEIXE_DE_MOLA",
+        6: "ENTRE_CENTRO",
+        7: "BRACO_FIXO",
+        8: "BRACO_MOVEL",
+        9: "PARAFUSO_DOS_BRACOS",
+        10: "TAMPA_CUBO"
+    }
+
+    perguntas_com_observacao = [3, 4, 5, 6, 7, 8]
+    resultados, observacoes = {}, {}
+
+    # ======== CSS VISUAL ========
+    st.markdown("""
+        <style>
+        .linha-check {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            background-color: #f9fafb;
+            border: 1px solid #e3e6e8;
+            border-radius: 10px;
+            padding: 10px 15px;
+            margin-bottom: 10px;
+        }
+        .texto-check {
+            flex: 5;
+            font-weight: 600;
+            color: #333;
+        }
+        .radio-check {
+            flex: 1.2;
+            text-align: center;
+        }
+        .input-check {
+            flex: 2;
+        }
+        </style>
+    """, unsafe_allow_html=True)
+
+    # ======== FORM CHECKLIST ========
+    with st.form(key=f"form_checklist_{numero_serie}", clear_on_submit=False):
+        for i, pergunta in enumerate(perguntas, start=1):
+            col1, col2, col3 = st.columns([3, 1.2, 2], gap="small")
+
+            with col1:
+                st.markdown(f"<div class='texto-check'>{i}. {pergunta}</div>", unsafe_allow_html=True)
+
+            with col2:
+                escolha = st.radio(
+                    "",
+                    ["✅", "❌", "🟡"],
+                    key=f"resp_{numero_serie}_{i}",
+                    horizontal=True,
+                    index=None,
+                    label_visibility="collapsed"
+                )
+            resultados[i] = escolha
+
+            with col3:
+                if i in perguntas_com_observacao:
+                    observacoes[i] = st.text_input(
+                        "",
+                        key=f"obs_{numero_serie}_{i}",
+                        placeholder="Informe valor / tipo / dimensão..."
+                    )
+                else:
+                    observacoes[i] = None
+
+        st.markdown("---")
+        submit = st.form_submit_button("💾 Salvar Checklist", use_container_width=True)
+
+    # ======== VALIDAÇÃO E SALVAMENTO ========
+    if submit:
+        if st.session_state.checklist_bloqueado:
+            st.warning("⏳ Salvamento em andamento... aguarde.")
+            return
+
+        st.session_state.checklist_bloqueado = True
+
+        faltando = [i for i, resp in resultados.items() if resp is None]
+        faltando_obs = [i for i in perguntas_com_observacao if not observacoes[i]]
+
+        if faltando or faltando_obs:
+            msg = ""
+            if faltando:
+                msg += f"⚠️ Responda todas as perguntas! Faltam: {[item_keys[i] for i in faltando]}\n"
+            if faltando_obs:
+                msg += f"⚠️ Preencha as observações obrigatórias! Faltam: {[item_keys[i] for i in faltando_obs]}"
+            st.error(msg)
+            st.session_state.checklist_bloqueado = False
+            return
+
+        dados_para_salvar = {}
+        for i, resp in resultados.items():
+            chave_item = item_keys.get(i, f"Item_{i}")
+            dados_para_salvar[chave_item] = {
+                "status": status_emoji_para_texto(resp),
+                "obs": observacoes[i]
+            }
+
+        try:
+            salvar_checklist(numero_serie, dados_para_salvar, usuario)
+            st.success(f"✅ Checklist do Nº de Série {numero_serie} salvo com sucesso!")
+            st.session_state.checklist_cache[numero_serie] = dados_para_salvar
+            time.sleep(0.5)
+        except Exception as e:
+            st.error(f"❌ Erro ao salvar checklist: {e}")
+        finally:
+            st.session_state.checklist_bloqueado = False
+
+
+
+
 # ==============================
-# PÁGINA PRINCIPAL
+# PÁGINA PRINCIPAL - APONTAMENTO
 # ==============================
 def pagina_apontamento_mola():
     st.title("🧩 Apontamento Automático - MOLA")
@@ -133,7 +292,6 @@ def pagina_apontamento_mola():
         on_change=processar_leitura
     )
 
-    # Mantém foco automático no campo do leitor
     components.html("""
         <script>
         function focarInput(){
@@ -196,29 +354,61 @@ def pagina_apontamento_mola():
         st.info("Nenhum apontamento registrado ainda.")
 
 
-# ==============================
+# ==========================================
 # APP PRINCIPAL
-# ==============================
+# ==========================================
 def app():
     if "usuario" not in st.session_state:
         st.session_state["usuario"] = "Operador_Logado"
-    if "numero_serie" not in st.session_state:
-        st.session_state["numero_serie"] = ""
-    if "op" not in st.session_state:
-        st.session_state["op"] = ""
-    if "mensagem_erro" not in st.session_state:
-        st.session_state["mensagem_erro"] = None
-    if "sucesso_flag" not in st.session_state:
-        st.session_state["sucesso_flag"] = False
 
     st.sidebar.title("Menu")
-    menu = st.sidebar.radio("Navegação", ["Apontamento MOLA", "Dashboard", "Relatórios"])
+    menu = st.sidebar.radio(
+        "Navegação",
+        ["Apontamento MOLA", "Checklist de Qualidade", "Dashboard", "Relatórios"]
+    )
 
     if menu == "Apontamento MOLA":
         pagina_apontamento_mola()
+
+    elif menu == "Checklist de Qualidade":
+        st.title("🧾 Checklist de Qualidade - MOLA")
+
+        # ======================== CHECKLIST AUTOMÁTICO ========================
+        df_apont = carregar_apontamentos()
+        hoje = datetime.datetime.now(TZ).date()
+
+        if not df_apont.empty:
+            start_of_day = TZ.localize(datetime.datetime.combine(hoje, datetime.time.min))
+            end_of_day = TZ.localize(datetime.datetime.combine(hoje, datetime.time.max))
+            df_hoje = df_apont[
+                (df_apont["data_hora"] >= start_of_day) &
+                (df_apont["data_hora"] <= end_of_day)
+            ].sort_values(by="data_hora", ascending=True)
+
+            codigos_hoje = df_hoje.drop_duplicates(subset="numero_serie")["numero_serie"].tolist()
+        else:
+            codigos_hoje = []
+
+        df_checks = carregar_checklists()
+        codigos_com_checklist = df_checks["numero_serie"].unique() if not df_checks.empty else []
+
+        codigos_disponiveis = [c for c in codigos_hoje if c not in codigos_com_checklist]
+
+        if codigos_disponiveis:
+            numero_serie = st.selectbox(
+                "Selecione o Nº de Série para Inspeção",
+                codigos_disponiveis,
+                index=0
+            )
+            usuario = st.session_state["usuario"]
+            checklist_molas(numero_serie, usuario)
+        else:
+            st.info("Nenhum código disponível para inspeção hoje.")
+
     elif menu == "Dashboard":
         st.title("📊 Dashboard de Produção")
         st.info("Em desenvolvimento...")
+
     elif menu == "Relatórios":
         st.title("📜 Relatórios")
         st.info("Em desenvolvimento...")
@@ -229,3 +419,4 @@ def app():
 # ==============================
 if __name__ == "__main__":
     app()
+
