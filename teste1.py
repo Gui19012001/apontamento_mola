@@ -36,7 +36,8 @@ def salvar_apontamento_mola(numero_serie: str, op: str, usuario: str):
         .eq("numero_serie", numero_serie) \
         .execute()
     if check.data:
-        return False, f"Série {numero_serie} já apontada {núm. série}."
+        return False, f"Série {numero_serie} já apontada."
+
 
     data_hora = datetime.datetime.now(datetime.timezone.utc).isoformat()
 
