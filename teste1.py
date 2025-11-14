@@ -218,7 +218,7 @@ def checklist_molas(numero_serie, usuario, op=None):
         7: "BRACO_FIXO",
         8: "BRACO_MOVEL",
         9: "PARAFUSO_DOS_BRACOS",
-        10: "TAMPA_CUBO"
+        10: "SOLDA"
     }
 
     perguntas_com_observacao = [3, 4, 5, 6, 7, 8]
