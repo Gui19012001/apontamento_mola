@@ -54,7 +54,7 @@ def salvar_apontamento_mola(numero_serie: str, op: str, usuario: str):
         return False, str(e)
 
 
-@st.cache_data(ttl=10)
+
 def carregar_apontamentos():
     try:
         data = supabase.table("apontamentos_mola") \
