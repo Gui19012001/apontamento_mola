@@ -60,7 +60,7 @@ def carregar_apontamentos():
         data = supabase.table("apontamentos_mola") \
             .select("*") \
             .order("data_hora", desc=True) \
-            .limit(100) \
+            .limit(1000) \
             .execute()
         df = pd.DataFrame(data.data)
         if not df.empty:
