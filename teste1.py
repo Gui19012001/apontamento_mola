@@ -81,13 +81,43 @@ def contar_apontamentos_hoje():
 
 @st.cache_data(ttl=10)
 def carregar_checklists_mola_detalhes():
+    """Carrega todos os detalhes dos checklists da tabela checklists_mola_detalhes sem limite de linhas."""
     try:
-        response = supabase.table("checklists_mola_detalhes").select("*").execute()
-        df = pd.DataFrame(response.data)
+        data_total = []
+        inicio = 0
+        passo = 1000  # Supabase retorna no máximo 1000 por vez
+
+        while True:
+            response = (
+                supabase
+                .table("checklists_mola_detalhes")
+                .select("*")
+                .range(inicio, inicio + passo - 1)
+                .execute()
+            )
+
+            dados = response.data
+            if not dados:
+                break
+
+            data_total.extend(dados)
+            inicio += passo
+
+        df = pd.DataFrame(data_total)
+
+        # Conversão de data se existir a coluna
+        if not df.empty:
+            # Para detalhes, talvez a coluna seja diferente
+            for col in ["data_hora", "created_at", "updated_at"]:
+                if col in df.columns:
+                    df[col] = pd.to_datetime(df[col], utc=True).dt.tz_convert(TZ)
+
         return df
+
     except Exception as e:
         st.error(f"Erro ao carregar checklists detalhados: {e}")
         return pd.DataFrame()
+
 
 # ==============================
 # FUNÇÃO DE SALVAMENTO DETALHADO
