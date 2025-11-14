@@ -89,13 +89,31 @@ def contar_apontamentos_hoje():
 # CHECKLISTS - versão sem cache
 # ==============================
 def carregar_checklists_mola_detalhes():
+    """Carrega todos os checklists detalhados sem limite de 1000 linhas."""
+    data_total = []
+    inicio = 0
+    passo = 1000
+
     try:
-        response = supabase.table("checklists_mola_detalhes").select("*").execute()
-        df = pd.DataFrame(response.data)
-        return df
+        while True:
+            response = (
+                supabase.table("checklists_mola_detalhes")
+                .select("*")
+                .range(inicio, inicio + passo - 1)
+                .execute()
+            )
+            dados = response.data
+            if not dados:
+                break
+            data_total.extend(dados)
+            inicio += passo
+
+        return pd.DataFrame(data_total)
+
     except Exception as e:
         st.error(f"Erro ao carregar checklists detalhados: {e}")
         return pd.DataFrame()
+
 
 
 # ==============================
