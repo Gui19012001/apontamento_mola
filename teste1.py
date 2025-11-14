@@ -32,12 +32,11 @@ def salvar_apontamento_mola(numero_serie: str, op: str, usuario: str):
         return False, "Número de série e OP obrigatórios."
 
     check = supabase.table("apontamentos_mola") \
-        .select("*") \
+        .select("id") \
         .eq("numero_serie", numero_serie) \
-        .eq("op", op) \
         .execute()
     if check.data:
-        return False, f"Série {numero_serie} já apontada na OP {op}."
+        return False, f"Série {numero_serie} já apontada {núm. série}."
 
     data_hora = datetime.datetime.now(datetime.timezone.utc).isoformat()
 
