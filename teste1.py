@@ -205,7 +205,7 @@ def checklist_molas(numero_serie, usuario, op=None):
         "Qual o comprimento do braço fixo utilizado?",
         "Qual o comprimento do braço móvel utilizado?",
         "Os parafusos dos braços estão apertados?",
-        "Porcas das bases laterais do Rack está corretamente apertadas?"
+        "Porcas das bases laterais do Rack está corretamente apertadas?",
         "Tampa do cubo, pintura e graxeiras estão conforme?"
     ]
 
