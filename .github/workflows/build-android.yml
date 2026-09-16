@@ -66,9 +66,12 @@ jobs:
 
       - name: Instalar Buildozer
         run: |
-          python -m pip install --upgrade pip setuptools wheel
-          python -m pip install "cython<3" buildozer
-          echo "Buildozer:"
+          python -m pip install --upgrade "pip==24.0" setuptools wheel
+          python -m pip install \
+            "buildozer==1.5.0" \
+            "cython==0.29.33"
+
+          python -m pip --version
           buildozer --version
 
       - name: Limpar build anterior
