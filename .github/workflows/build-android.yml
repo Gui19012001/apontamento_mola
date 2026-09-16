@@ -94,13 +94,18 @@ jobs:
             exit 1
           }
 
+          grep -q '^android.ndk = 28c' buildozer.spec || {
+            echo "ERRO: android.ndk deve estar fixado em 28c"
+            exit 1
+          }
+
           grep -q '^p4a.branch = develop' buildozer.spec || {
             echo "ERRO: p4a.branch incorreto"
             exit 1
           }
 
-          grep -q '^p4a.commit = 0382d27de2f7315ed98e74884bafb30365decdee' buildozer.spec || {
-            echo "ERRO: p4a.commit de correcao nao configurado"
+          grep -q '^p4a.commit = 5865575d81d53617784428ee29f57be2716311ea' buildozer.spec || {
+            echo "ERRO: p4a.commit com correcao de wheels Android nao configurado"
             exit 1
           }
 
