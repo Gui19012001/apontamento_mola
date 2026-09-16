@@ -9,7 +9,7 @@ jobs:
 
     steps:
       # ==========================================================
-      # CHECKOUT
+      # REPOSITÓRIO
       # ==========================================================
       - name: Checkout
         uses: actions/checkout@v4
@@ -17,7 +17,7 @@ jobs:
       # ==========================================================
       # PYTHON
       # ==========================================================
-      - name: Python 3.11
+      - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
@@ -25,36 +25,17 @@ jobs:
       # ==========================================================
       # JAVA
       # ==========================================================
-      - name: Java 17
-        uses: actions/setup-java@v5
+      - name: Set up Java
+        uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: "17"
 
       # ==========================================================
-      # CONFIGURAÇÃO DO TABLET / API TOTVS
-      # ==========================================================
-      - name: Criar configuração do tablet
-        shell: bash
-        run: |
-          cat > teste.env <<'ENVEOF'
-          TOTVS_API_BASE=http://192.168.2.15:8195/rest/apontmod2
-          TOTVS_USERNAME=${{ secrets.TOTVS_USERNAME }}
-          TOTVS_PASSWORD=${{ secrets.TOTVS_PASSWORD }}
-          TOTVS_TENANT_ID=${{ secrets.TOTVS_TENANT_ID }}
-
-          TOTVS_TIMEOUT=100
-
-          # Consulta da OP filtrada
-          TOTVS_GET_ID_PATH=get_id
-          TOTVS_GET_ID_MODE=param
-          TOTVS_GET_ID_PARAM=op
-          ENVEOF
-
-      # ==========================================================
       # DEPENDÊNCIAS LINUX
+      # MESMO PADRÃO DO APK QUE JÁ FUNCIONA
       # ==========================================================
-      - name: Dependências Linux
+      - name: Install Linux dependencies
         run: |
           sudo apt update
 
@@ -77,6 +58,7 @@ jobs:
             libtool \
             libtinfo6 \
             make \
+            openjdk-17-jdk \
             patch \
             pkg-config \
             python3-dev \
@@ -88,87 +70,45 @@ jobs:
             zlib1g-dev
 
       # ==========================================================
-      # BUILDOZER / PYTHON-FOR-ANDROID
-      #
-      # IMPORTANTE:
-      # Não atualizar o pip para a versão mais recente.
-      # python-for-android ainda depende de
-      # BuildDependencyInstallError existente no pip 24.0.
+      # GERAR CONFIGURAÇÃO DO APK
       # ==========================================================
-      - name: Instalar Buildozer
+      - name: Gerar teste.env
         run: |
-          python -m pip install --upgrade \
-            "pip==24.0" \
-            setuptools \
-            wheel
+          cat > teste.env <<EOF
+          TOTVS_API_BASE=${{ secrets.TOTVS_API_BASE }}
+          TOTVS_USERNAME=${{ secrets.TOTVS_USERNAME }}
+          TOTVS_PASSWORD=${{ secrets.TOTVS_PASSWORD }}
+          TOTVS_TIMEOUT=${{ secrets.TOTVS_TIMEOUT }}
+          TOTVS_TENANT_ID=${{ secrets.TOTVS_TENANT_ID }}
+
+          TOTVS_GET_ID_PATH=get_id
+          TOTVS_GET_ID_MODE=param
+          TOTVS_GET_ID_PARAM=op
+          EOF
+
+      # ==========================================================
+      # BUILDOZER
+      # EXATAMENTE O PADRÃO DO APK QUE JÁ FUNCIONA
+      # ==========================================================
+      - name: Install Buildozer
+        run: |
+          python -m pip install "pip==24.0" wheel
 
           python -m pip install \
-            "buildozer==1.5.0" \
-            "cython==0.29.33"
+            "setuptools<75" \
+            "cython==0.29.34" \
+            "buildozer==1.5.0"
 
-          echo "=============================="
-          echo "VERSÕES DO AMBIENTE"
-          echo "=============================="
-
+          pip --version
           python --version
-          python -m pip --version
-          java -version
           buildozer --version
 
       # ==========================================================
-      # LIMPEZA
-      # ==========================================================
-      - name: Limpar build anterior
-        run: |
-          rm -rf .buildozer
-          rm -rf ~/.buildozer
-          rm -rf ~/.cache/pip
-          rm -rf bin
-
-      # ==========================================================
-      # VERIFICAÇÃO
-      # ==========================================================
-      - name: Verificar arquivos do projeto
-        run: |
-          echo "=============================="
-          echo "ARQUIVOS DO REPOSITÓRIO"
-          echo "=============================="
-
-          ls -la
-
-          echo ""
-          echo "=============================="
-          echo "BUILDOZER.SPEC"
-          echo "=============================="
-
-          cat buildozer.spec
-
-          echo ""
-          echo "=============================="
-          echo "TESTE.ENV"
-          echo "=============================="
-
-          # Não exibe usuário/senha no log
-          grep -v "TOTVS_USERNAME" teste.env \
-            | grep -v "TOTVS_PASSWORD"
-
-      # ==========================================================
-      # BUILD APK
+      # BUILD
       # ==========================================================
       - name: Build APK
         run: |
-          yes | buildozer -v android debug
-
-      # ==========================================================
-      # LISTAR APK
-      # ==========================================================
-      - name: Verificar APK gerado
-        run: |
-          echo "=============================="
-          echo "APK GERADO"
-          echo "=============================="
-
-          ls -lah bin/
+          buildozer android debug
 
       # ==========================================================
       # UPLOAD DO APK
@@ -179,4 +119,3 @@ jobs:
           name: apontamento-roteiro-teste-apk
           path: bin/*.apk
           if-no-files-found: error
-          retention-days: 15
