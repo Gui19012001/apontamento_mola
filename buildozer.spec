@@ -10,10 +10,8 @@ source.exclude_dirs = .git,.github,__pycache__,bin,.buildozer,venv
 
 version = 0.1.0
 
-# IMPORTANTE:
-# Nao fixe python3 em 3.11.x aqui. O python-for-android usa a mesma versao
-# para python3 e hostpython3. O commit p4a travado abaixo resolve o problema
-# do venv/pip sem criar incompatibilidade entre as receitas.
+# Nao fixe python3 em 3.11.x aqui.
+# O python-for-android deve manter python3 e hostpython3 na mesma versao.
 requirements = python3,kivy==2.3.1,requests,urllib3,idna,certifi
 
 orientation = landscape
@@ -25,14 +23,14 @@ android.minapi = 24
 android.archs = arm64-v8a, armeabi-v7a
 android.accept_sdk_license = True
 
-# Ambiente Android reproduzivel
+# Versao recomendada pelo p4a usado neste projeto.
 android.ndk = 28c
 
-# PR kivy/python-for-android #3360:
-# limpa o venv interno e remove o "pip install -U pip" que causava
-# ImportError: BuildDependencyInstallError.
+# Commit do python-for-android que contem:
+# - correcao do venv/pip que causava BuildDependencyInstallError (#3360)
+# - correcao da instalacao de wheels Android, incluindo charset-normalizer (#3366)
 p4a.branch = develop
-p4a.commit = 0382d27de2f7315ed98e74884bafb30365decdee
+p4a.commit = 5865575d81d53617784428ee29f57be2716311ea
 
 [buildozer]
 
