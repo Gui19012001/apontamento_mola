@@ -1,42 +1,182 @@
-The job fails because the Buildozer/python-for-android environment is using an incompatible version of pip.
+name: Build Android APK
 
-The decisive error is:
+on:
+  workflow_dispatch:
 
-Text
-ImportError: cannot import name 'BuildDependencyInstallError'
-from pip._internal.exceptions
-The Kivy Cython messages marked --- ERROR --- are performance hints, not the cause of the failure.
+jobs:
+  build-android:
+    runs-on: ubuntu-24.04
 
-Your workflow currently installs the latest pip:
+    steps:
+      # ==========================================================
+      # CHECKOUT
+      # ==========================================================
+      - name: Checkout
+        uses: actions/checkout@v4
 
-YAML
-python -m pip install --upgrade pip setuptools wheel
-The latest pip removed BuildDependencyInstallError, while the python-for-android version used by Buildozer still imports it.
+      # ==========================================================
+      # PYTHON
+      # ==========================================================
+      - name: Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
 
-Fix
-Pin pip to a compatible version before installing Buildozer. Also pin Buildozer and Cython for reproducible Android builds.
+      # ==========================================================
+      # JAVA
+      # ==========================================================
+      - name: Java 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
 
-Replace the Instalar Buildozer step in .github/workflows/build-android.yml with:
+      # ==========================================================
+      # CONFIGURAÇÃO DO TABLET / API TOTVS
+      # ==========================================================
+      - name: Criar configuração do tablet
+        shell: bash
+        run: |
+          cat > teste.env <<'ENVEOF'
+          TOTVS_API_BASE=http://192.168.2.15:8195/rest/apontmod2
+          TOTVS_USERNAME=${{ secrets.TOTVS_USERNAME }}
+          TOTVS_PASSWORD=${{ secrets.TOTVS_PASSWORD }}
+          TOTVS_TENANT_ID=${{ secrets.TOTVS_TENANT_ID }}
 
-YAML
-- name: Instalar Buildozer
-  run: |
-    python -m pip install --upgrade "pip==24.0" setuptools wheel
-    python -m pip install \
-      "buildozer==1.5.0" \
-      "cython==0.29.33"
+          TOTVS_TIMEOUT=100
 
-    python -m pip --version
-    buildozer --version
-The important part is:
+          # Consulta da OP filtrada
+          TOTVS_GET_ID_PATH=get_id
+          TOTVS_GET_ID_MODE=param
+          TOTVS_GET_ID_PARAM=op
+          ENVEOF
 
-bash
-python -m pip install "pip==24.0"
-Do not upgrade pip to the latest version in this workflow.
+      # ==========================================================
+      # DEPENDÊNCIAS LINUX
+      # ==========================================================
+      - name: Dependências Linux
+        run: |
+          sudo apt update
 
-Your existing buildozer.spec requirements can remain unchanged:
+          sudo apt install -y \
+            ant \
+            autoconf \
+            automake \
+            ccache \
+            cmake \
+            g++ \
+            gcc \
+            gettext \
+            git \
+            lbzip2 \
+            libffi-dev \
+            libltdl-dev \
+            libncurses5-dev \
+            libncursesw5-dev \
+            libssl-dev \
+            libtool \
+            libtinfo6 \
+            make \
+            patch \
+            pkg-config \
+            python3-dev \
+            python3-pip \
+            python3-venv \
+            unzip \
+            wget \
+            zip \
+            zlib1g-dev
 
-INI
-requirements = python3,kivy==2.3.1,requests,urllib3,idna,certifi
-The failure occurs during the Python-for-Android build environment setup, before these application requirements are the problem. After pinning pip, the BuildDependencyInstallError import should resolve and the APK build can proceed.
+      # ==========================================================
+      # BUILDOZER / PYTHON-FOR-ANDROID
+      #
+      # IMPORTANTE:
+      # Não atualizar o pip para a versão mais recente.
+      # python-for-android ainda depende de
+      # BuildDependencyInstallError existente no pip 24.0.
+      # ==========================================================
+      - name: Instalar Buildozer
+        run: |
+          python -m pip install --upgrade \
+            "pip==24.0" \
+            setuptools \
+            wheel
 
+          python -m pip install \
+            "buildozer==1.5.0" \
+            "cython==0.29.33"
+
+          echo "=============================="
+          echo "VERSÕES DO AMBIENTE"
+          echo "=============================="
+
+          python --version
+          python -m pip --version
+          java -version
+          buildozer --version
+
+      # ==========================================================
+      # LIMPEZA
+      # ==========================================================
+      - name: Limpar build anterior
+        run: |
+          rm -rf .buildozer
+          rm -rf ~/.buildozer
+          rm -rf ~/.cache/pip
+          rm -rf bin
+
+      # ==========================================================
+      # VERIFICAÇÃO
+      # ==========================================================
+      - name: Verificar arquivos do projeto
+        run: |
+          echo "=============================="
+          echo "ARQUIVOS DO REPOSITÓRIO"
+          echo "=============================="
+
+          ls -la
+
+          echo ""
+          echo "=============================="
+          echo "BUILDOZER.SPEC"
+          echo "=============================="
+
+          cat buildozer.spec
+
+          echo ""
+          echo "=============================="
+          echo "TESTE.ENV"
+          echo "=============================="
+
+          # Não exibe usuário/senha no log
+          grep -v "TOTVS_USERNAME" teste.env \
+            | grep -v "TOTVS_PASSWORD"
+
+      # ==========================================================
+      # BUILD APK
+      # ==========================================================
+      - name: Build APK
+        run: |
+          yes | buildozer -v android debug
+
+      # ==========================================================
+      # LISTAR APK
+      # ==========================================================
+      - name: Verificar APK gerado
+        run: |
+          echo "=============================="
+          echo "APK GERADO"
+          echo "=============================="
+
+          ls -lah bin/
+
+      # ==========================================================
+      # UPLOAD DO APK
+      # ==========================================================
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: apontamento-roteiro-teste-apk
+          path: bin/*.apk
+          if-no-files-found: error
+          retention-days: 15
