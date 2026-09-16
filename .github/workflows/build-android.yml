@@ -1,93 +1,42 @@
-name: Build Android APK
+The job fails because the Buildozer/python-for-android environment is using an incompatible version of pip.
 
-on:
-  workflow_dispatch:
+The decisive error is:
 
-jobs:
-  build-android:
-    runs-on: ubuntu-24.04
+Text
+ImportError: cannot import name 'BuildDependencyInstallError'
+from pip._internal.exceptions
+The Kivy Cython messages marked --- ERROR --- are performance hints, not the cause of the failure.
 
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+Your workflow currently installs the latest pip:
 
-      - name: Python 3.11
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
+YAML
+python -m pip install --upgrade pip setuptools wheel
+The latest pip removed BuildDependencyInstallError, while the python-for-android version used by Buildozer still imports it.
 
-      - name: Java 17
-        uses: actions/setup-java@v5
-        with:
-          distribution: temurin
-          java-version: "17"
+Fix
+Pin pip to a compatible version before installing Buildozer. Also pin Buildozer and Cython for reproducible Android builds.
 
-      - name: Criar configuração do tablet
-        shell: bash
-        run: |
-          cat > teste.env <<'ENVEOF'
-          TOTVS_API_BASE=http://192.168.2.15:8195/rest/apontmod2
-          TOTVS_USERNAME=${{ secrets.TOTVS_USERNAME }}
-          TOTVS_PASSWORD=${{ secrets.TOTVS_PASSWORD }}
-          TOTVS_TENANT_ID=${{ secrets.TOTVS_TENANT_ID }}
-          TOTVS_TIMEOUT=100
-          TOTVS_GET_ID_PATH=get_id
-          TOTVS_GET_ID_MODE=param
-          TOTVS_GET_ID_PARAM=op
-          ENVEOF
+Replace the Instalar Buildozer step in .github/workflows/build-android.yml with:
 
-      - name: Dependências Linux
-        run: |
-          sudo apt update
-          sudo apt install -y \
-            ant \
-            autoconf \
-            automake \
-            ccache \
-            cmake \
-            g++ \
-            gcc \
-            gettext \
-            git \
-            lbzip2 \
-            libffi-dev \
-            libltdl-dev \
-            libncurses5-dev \
-            libncursesw5-dev \
-            libssl-dev \
-            libtool \
-            libtinfo6 \
-            make \
-            patch \
-            pkg-config \
-            unzip \
-            zip \
-            zlib1g-dev
+YAML
+- name: Instalar Buildozer
+  run: |
+    python -m pip install --upgrade "pip==24.0" setuptools wheel
+    python -m pip install \
+      "buildozer==1.5.0" \
+      "cython==0.29.33"
 
-      - name: Instalar Buildozer
-        run: |
-          python -m pip install --upgrade "pip==24.0" setuptools wheel
-          python -m pip install \
-            "buildozer==1.5.0" \
-            "cython==0.29.33"
+    python -m pip --version
+    buildozer --version
+The important part is:
 
-          python -m pip --version
-          buildozer --version
+bash
+python -m pip install "pip==24.0"
+Do not upgrade pip to the latest version in this workflow.
 
-      - name: Limpar build anterior
-        run: |
-          rm -rf .buildozer
-          rm -rf ~/.buildozer
-          rm -rf ~/.cache/pip
-          rm -rf bin
+Your existing buildozer.spec requirements can remain unchanged:
 
-      - name: Build APK
-        run: |
-          yes | buildozer -v android debug
+INI
+requirements = python3,kivy==2.3.1,requests,urllib3,idna,certifi
+The failure occurs during the Python-for-Android build environment setup, before these application requirements are the problem. After pinning pip, the BuildDependencyInstallError import should resolve and the APK build can proceed.
 
-      - name: Upload APK
-        uses: actions/upload-artifact@v4
-        with:
-          name: apontamento-roteiro-teste-apk
-          path: bin/*.apk
-          if-no-files-found: error
