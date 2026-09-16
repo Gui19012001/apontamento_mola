@@ -63,9 +63,6 @@ jobs:
           TOTVS_PASSWORD=${{ secrets.TOTVS_PASSWORD }}
           TOTVS_TIMEOUT=${{ secrets.TOTVS_TIMEOUT }}
           TOTVS_TENANT_ID=${{ secrets.TOTVS_TENANT_ID }}
-          TOTVS_GET_ID_PATH=get_id
-          TOTVS_GET_ID_MODE=param
-          TOTVS_GET_ID_PARAM=op
           EOF
 
       - name: Install Buildozer
@@ -116,6 +113,6 @@ jobs:
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: apontamento-roteiro-teste-apk
+          name: apontamento-operacao-teste-apk
           path: bin/*.apk
           if-no-files-found: error
