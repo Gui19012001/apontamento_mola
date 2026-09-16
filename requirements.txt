@@ -1,0 +1,5 @@
+kivy==2.3.1
+requests
+urllib3
+idna
+certifi
