@@ -16,7 +16,7 @@ from requests.auth import HTTPBasicAuth
 from kivy.app import App
 from kivy.clock import Clock
 from kivy.core.window import Window
-from kivy.graphics import Color, RoundedRectangle
+from kivy.graphics import Color, Line, RoundedRectangle
 from kivy.metrics import dp
 from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.button import Button
@@ -24,16 +24,21 @@ from kivy.uix.label import Label
 from kivy.uix.modalview import ModalView
 from kivy.uix.scrollview import ScrollView
 from kivy.uix.textinput import TextInput
+from kivy.utils import platform
 
-NAVY = (0.025, 0.14, 0.27, 1)
-NAVY_2 = (0.04, 0.22, 0.40, 1)
-BG = (0.94, 0.96, 0.98, 1)
+NAVY = (0.015, 0.075, 0.15, 1)
+NAVY_2 = (0.025, 0.145, 0.29, 1)
+NAVY_3 = (0.035, 0.22, 0.41, 1)
+BLUE = (0.00, 0.38, 0.72, 1)
+BLUE_SOFT = (0.90, 0.95, 0.99, 1)
+BG = (0.93, 0.955, 0.98, 1)
 CARD = (1, 1, 1, 1)
-TEXT = (0.08, 0.11, 0.15, 1)
-MUTED = (0.38, 0.43, 0.49, 1)
-GREEN = (0.08, 0.56, 0.29, 1)
-RED = (0.82, 0.13, 0.16, 1)
-AMBER = (0.93, 0.56, 0.08, 1)
+TEXT = (0.06, 0.10, 0.15, 1)
+MUTED = (0.39, 0.46, 0.54, 1)
+BORDER = (0.79, 0.85, 0.92, 1)
+GREEN = (0.06, 0.56, 0.29, 1)
+RED = (0.82, 0.12, 0.16, 1)
+AMBER = (0.93, 0.57, 0.07, 1)
 WHITE = (1, 1, 1, 1)
 APP_DIR = Path(__file__).resolve().parent
 
@@ -73,10 +78,6 @@ TOTVS_USERNAME = env("TOTVS_USERNAME")
 TOTVS_PASSWORD = env("TOTVS_PASSWORD")
 TOTVS_TENANT_ID = env("TOTVS_TENANT_ID")
 TOTVS_TIMEOUT = int(env("TOTVS_TIMEOUT", "100") or "100")
-
-# Opcional. O APK não consulta roteiro.
-# Se ficar vazio, o campo roteiro não é enviado no POST.
-TOTVS_ROTEIRO_PADRAO = env("TOTVS_ROTEIRO_PADRAO", "")
 
 
 def s(value):
@@ -163,10 +164,31 @@ def interpretar_post(resp):
     return ok, (msg or f"HTTP {resp.status_code}"), body
 
 
-# ==========================================================
-# API: SOMENTE POST /new
-# Não existe GET/consulta de roteiro antes do apontamento.
-# ==========================================================
+def force_android_keyboard():
+    if platform != "android":
+        return
+    try:
+        from jnius import autoclass
+
+        PythonActivity = autoclass("org.kivy.android.PythonActivity")
+        Context = autoclass("android.content.Context")
+        InputMethodManager = autoclass("android.view.inputmethod.InputMethodManager")
+
+        activity = PythonActivity.mActivity
+        imm = activity.getSystemService(Context.INPUT_METHOD_SERVICE)
+        view = activity.getCurrentFocus()
+        if view is None:
+            view = activity.getWindow().getDecorView()
+        try:
+            view.requestFocus()
+        except Exception:
+            pass
+        imm.showSoftInput(view, InputMethodManager.SHOW_FORCED)
+        imm.toggleSoftInput(InputMethodManager.SHOW_FORCED, 0)
+    except Exception:
+        pass
+
+
 def apontar_totvs(op, operacao, quantidade):
     if not TOTVS_USERNAME or not TOTVS_PASSWORD:
         return {
@@ -183,8 +205,6 @@ def apontar_totvs(op, operacao, quantidade):
         "quant": quantidade,
         "lote": "",
     }
-    if TOTVS_ROTEIRO_PADRAO:
-        payload["roteiro"] = TOTVS_ROTEIRO_PADRAO
 
     url = f"{TOTVS_API_BASE}/new"
     try:
@@ -210,7 +230,7 @@ def apontar_totvs(op, operacao, quantidade):
             "http_status": None,
             "mensagem": (
                 "A API não respondeu dentro do tempo limite. "
-                "O POST pode ter chegado ao TOTVS. Confira antes de reapontar."
+                "Confira no TOTVS antes de tentar novamente."
             ),
             "payload": payload,
             "body": None,
@@ -264,11 +284,14 @@ class HistoricoDB:
                 )
                 """
             )
+            conn.execute(
+                "DELETE FROM historico WHERE UPPER(COALESCE(status, '')) <> 'APONTADO'"
+            )
             conn.commit()
 
-    def incluir(self, op, operacao, quantidade, result, tentativa_de=None):
-        payload = result.get("payload") or {}
-        roteiro = s(payload.get("roteiro")) if isinstance(payload, dict) else ""
+    def incluir_sucesso(self, op, operacao, quantidade, result):
+        if s(result.get("status")).upper() != "APONTADO":
+            return None
         with self.con() as conn:
             cur = conn.execute(
                 """
@@ -281,15 +304,15 @@ class HistoricoDB:
                 (
                     now_text(),
                     op,
-                    roteiro,
+                    "",
                     int(operacao),
                     float(quantidade),
-                    result.get("status", "ERRO"),
+                    "APONTADO",
                     result.get("http_status"),
                     result.get("mensagem", ""),
                     json.dumps(result.get("payload"), ensure_ascii=False, default=str),
                     json.dumps(result.get("body"), ensure_ascii=False, default=str),
-                    tentativa_de,
+                    None,
                 ),
             )
             conn.commit()
@@ -299,15 +322,34 @@ class HistoricoDB:
         with self.con() as conn:
             conn.row_factory = sqlite3.Row
             rows = conn.execute(
-                "SELECT * FROM historico ORDER BY id DESC LIMIT ?",
+                """
+                SELECT * FROM historico
+                WHERE UPPER(COALESCE(status, '')) = 'APONTADO'
+                ORDER BY id DESC
+                LIMIT ?
+                """,
                 (int(limit),),
             ).fetchall()
             return [dict(row) for row in rows]
 
 
-class Card(BoxLayout):
-    def __init__(self, bg=CARD, radius=14, **kwargs):
+class Surface(BoxLayout):
+    def __init__(self, bg=BG, **kwargs):
         super().__init__(**kwargs)
+        with self.canvas.before:
+            Color(*bg)
+            self._rect = RoundedRectangle(pos=self.pos, size=self.size, radius=[0])
+        self.bind(pos=self._sync, size=self._sync)
+
+    def _sync(self, *_):
+        self._rect.pos = self.pos
+        self._rect.size = self.size
+
+
+class Card(BoxLayout):
+    def __init__(self, bg=CARD, radius=16, border=BORDER, border_width=1, **kwargs):
+        super().__init__(**kwargs)
+        self._radius = radius
         with self.canvas.before:
             Color(*bg)
             self._bg_rect = RoundedRectangle(
@@ -315,11 +357,32 @@ class Card(BoxLayout):
                 size=self.size,
                 radius=[dp(radius)],
             )
+            Color(*border)
+            self._border = Line(
+                rounded_rectangle=(self.x, self.y, self.width, self.height, dp(radius)),
+                width=border_width,
+            )
         self.bind(pos=self._sync_bg, size=self._sync_bg)
 
     def _sync_bg(self, *_):
         self._bg_rect.pos = self.pos
         self._bg_rect.size = self.size
+        self._border.rounded_rectangle = (
+            self.x,
+            self.y,
+            self.width,
+            self.height,
+            dp(self._radius),
+        )
+
+
+class IberoTextInput(TextInput):
+    def on_touch_down(self, touch):
+        result = super().on_touch_down(touch)
+        if self.collide_point(*touch.pos):
+            Clock.schedule_once(lambda *_: force_android_keyboard(), 0.12)
+            Clock.schedule_once(lambda *_: force_android_keyboard(), 0.42)
+        return result
 
 
 def mk_label(text="", color=TEXT, size=16, bold=False, halign="left", height=dp(36)):
@@ -337,7 +400,7 @@ def mk_label(text="", color=TEXT, size=16, bold=False, halign="left", height=dp(
     return label
 
 
-def mk_button(text, bg=NAVY, height=dp(58), font_size=17, width=None):
+def mk_button(text, bg=NAVY_2, height=dp(58), font_size=17, width=None):
     kwargs = {
         "text": text,
         "size_hint_y": None,
@@ -355,35 +418,29 @@ def mk_button(text, bg=NAVY, height=dp(58), font_size=17, width=None):
     return Button(**kwargs)
 
 
-def mk_input(hint, input_filter=None):
-    return TextInput(
+def mk_input(hint, input_filter=None, input_type="text"):
+    return IberoTextInput(
         hint_text=hint,
         multiline=False,
         size_hint_y=None,
-        height=dp(62),
-        font_size=21,
+        height=dp(66),
+        font_size=22,
         foreground_color=TEXT,
-        background_color=(0.975, 0.982, 0.99, 1),
-        cursor_color=NAVY,
-        padding=[dp(14), dp(16)],
+        hint_text_color=(0.48, 0.56, 0.64, 1),
+        background_color=(0.955, 0.975, 0.995, 1),
+        cursor_color=BLUE,
+        padding=[dp(16), dp(17)],
         input_filter=input_filter,
+        input_type=input_type,
+        write_tab=False,
     )
 
 
-def status_color(status):
-    status = s(status).upper()
-    if status == "APONTADO":
-        return GREEN
-    if status == "VERIFICAR":
-        return AMBER
-    return RED
-
-
 class ApontamentoRoteiroApp(App):
-    title = "Apontamento por Operação TESTE"
+    title = "IBERO • Apontamento por Operação TESTE"
 
     def build(self):
-        Window.clearcolor = BG
+        Window.clearcolor = NAVY
         try:
             Window.softinput_mode = "below_target"
         except Exception:
@@ -391,102 +448,117 @@ class ApontamentoRoteiroApp(App):
 
         Path(self.user_data_dir).mkdir(parents=True, exist_ok=True)
         self.db = HistoricoDB(str(Path(self.user_data_dir) / "historico_roteiro.db"))
-        self.current_retry_id = None
 
         root = BoxLayout(orientation="vertical", padding=0, spacing=0)
 
-        header = BoxLayout(
+        header = Surface(
             orientation="horizontal",
             size_hint_y=None,
-            height=dp(72),
-            padding=[dp(22), dp(8)],
+            height=dp(88),
+            padding=[dp(24), dp(10)],
+            spacing=dp(12),
+            bg=NAVY,
         )
-        with header.canvas.before:
-            Color(*NAVY)
-            header._bg = RoundedRectangle(pos=header.pos, size=header.size, radius=[0])
-        header.bind(
-            pos=lambda inst, *_: setattr(inst._bg, "pos", inst.pos),
-            size=lambda inst, *_: setattr(inst._bg, "size", inst.size),
-        )
-
-        title_box = BoxLayout(orientation="vertical", spacing=0)
-        title_box.add_widget(
-            mk_label("APONTAMENTO POR OPERAÇÃO", WHITE, 26, True, "left", dp(38))
-        )
-        title_box.add_widget(
+        brand = BoxLayout(orientation="vertical", spacing=0)
+        brand.add_widget(mk_label("IBERO", WHITE, 30, True, "left", dp(42)))
+        brand.add_widget(
             mk_label(
-                "AMBIENTE DE TESTE • envio direto ao TOTVS",
-                (0.78, 0.86, 0.94, 1),
-                13,
-                False,
+                "MANUFATURA  •  APONTAMENTO POR OPERAÇÃO",
+                (0.70, 0.83, 0.94, 1),
+                14,
+                True,
                 "left",
-                dp(22),
+                dp(25),
             )
         )
-        header.add_widget(title_box)
-        header.add_widget(
-            Label(
-                text="TESTE",
-                color=WHITE,
-                bold=True,
-                font_size=15,
-                size_hint=(None, None),
-                size=(dp(100), dp(38)),
-            )
-        )
-        root.add_widget(header)
+        header.add_widget(brand)
 
-        content = BoxLayout(
+        badge = Card(
+            orientation="vertical",
+            size_hint=(None, None),
+            size=(dp(126), dp(46)),
+            padding=[dp(10), dp(5)],
+            bg=NAVY_3,
+            border=BLUE,
+            radius=12,
+        )
+        badge.add_widget(mk_label("AMBIENTE TESTE", WHITE, 13, True, "center", dp(32)))
+        header.add_widget(badge)
+        root.add_widget(header)
+        root.add_widget(Surface(size_hint_y=None, height=dp(5), bg=BLUE))
+
+        content = Surface(
             orientation="horizontal",
             padding=dp(16),
             spacing=dp(16),
+            bg=BG,
         )
 
         left = Card(
             orientation="vertical",
             padding=dp(18),
-            spacing=dp(8),
+            spacing=dp(7),
             size_hint_x=0.43,
+            bg=CARD,
+            radius=18,
         )
-        left.add_widget(mk_label("NOVO APONTAMENTO", NAVY, 21, True, "left", dp(38)))
+        left.add_widget(mk_label("NOVO APONTAMENTO", NAVY, 23, True, "left", dp(40)))
         left.add_widget(
             mk_label(
-                "Preencha os três campos e envie. Não existe consulta prévia.",
+                "Bipe a OP, informe operação e quantidade e envie ao TOTVS.",
                 MUTED,
                 13,
                 False,
                 "left",
-                dp(34),
+                dp(32),
             )
         )
 
-        left.add_widget(mk_label("OP", NAVY_2, 15, True, "left", dp(27)))
-        self.op_input = mk_input("Ex.: X0222601020")
+        flow = Card(
+            orientation="horizontal",
+            size_hint_y=None,
+            height=dp(40),
+            padding=[dp(10), dp(3)],
+            spacing=dp(8),
+            bg=BLUE_SOFT,
+            border=(0.75, 0.86, 0.95, 1),
+            radius=10,
+        )
+        flow.add_widget(mk_label("1  OP", NAVY_2, 12, True, "center", dp(30)))
+        flow.add_widget(mk_label("›", BLUE, 18, True, "center", dp(30)))
+        flow.add_widget(mk_label("2  OPERAÇÃO", NAVY_2, 12, True, "center", dp(30)))
+        flow.add_widget(mk_label("›", BLUE, 18, True, "center", dp(30)))
+        flow.add_widget(mk_label("3  QUANTIDADE", NAVY_2, 12, True, "center", dp(30)))
+        left.add_widget(flow)
+
+        left.add_widget(mk_label("OP", NAVY_2, 14, True, "left", dp(25)))
+        self.op_input = mk_input("Bipe ou digite a OP")
         left.add_widget(self.op_input)
 
-        left.add_widget(mk_label("OPERAÇÃO", NAVY_2, 15, True, "left", dp(27)))
-        self.oper_input = mk_input("Ex.: 20", "int")
+        left.add_widget(mk_label("OPERAÇÃO", NAVY_2, 14, True, "left", dp(25)))
+        self.oper_input = mk_input("Ex.: 10", "int", "number")
         left.add_widget(self.oper_input)
 
-        left.add_widget(mk_label("QUANTIDADE", NAVY_2, 15, True, "left", dp(27)))
-        self.quant_input = mk_input("Ex.: 20")
+        left.add_widget(mk_label("QUANTIDADE", NAVY_2, 14, True, "left", dp(25)))
+        self.quant_input = mk_input("Ex.: 54", None, "number")
         left.add_widget(self.quant_input)
 
-        left.add_widget(BoxLayout(size_hint_y=None, height=dp(4)))
-        self.apontar_btn = mk_button("APONTAR AGORA", NAVY, dp(66), 19)
+        left.add_widget(BoxLayout(size_hint_y=None, height=dp(3)))
+        self.apontar_btn = mk_button("APONTAR AGORA", NAVY_2, dp(68), 19)
         self.apontar_btn.bind(on_release=self.on_apontar)
         left.add_widget(self.apontar_btn)
 
         self.status_card = Card(
             orientation="vertical",
-            padding=[dp(14), dp(6)],
+            padding=[dp(12), dp(4)],
             size_hint_y=None,
-            height=dp(62),
-            bg=(0.965, 0.975, 0.985, 1),
-            radius=10,
+            height=dp(58),
+            bg=BLUE_SOFT,
+            border=(0.75, 0.86, 0.95, 1),
+            radius=11,
         )
         self.status_label = mk_label(
-            "PRONTO PARA APONTAR", MUTED, 14, True, "center", dp(48)
+            "PRONTO PARA APONTAR", NAVY_2, 14, True, "center", dp(46)
         )
         self.status_card.add_widget(self.status_label)
         left.add_widget(self.status_card)
@@ -497,17 +569,29 @@ class ApontamentoRoteiroApp(App):
             padding=dp(16),
             spacing=dp(8),
             size_hint_x=0.57,
+            bg=CARD,
+            radius=18,
         )
         history_header = BoxLayout(
             orientation="horizontal",
             size_hint_y=None,
-            height=dp(46),
+            height=dp(52),
             spacing=dp(10),
         )
-        history_header.add_widget(
-            mk_label("ÚLTIMOS APONTAMENTOS", NAVY, 21, True, "left", dp(46))
+        titles = BoxLayout(orientation="vertical", spacing=0)
+        titles.add_widget(mk_label("HISTÓRICO CONFIRMADO", NAVY, 21, True, "left", dp(30)))
+        titles.add_widget(
+            mk_label(
+                "Somente apontamentos aceitos pelo TOTVS",
+                MUTED,
+                12,
+                False,
+                "left",
+                dp(20),
+            )
         )
-        refresh_btn = mk_button("ATUALIZAR", NAVY_2, dp(40), 13, dp(116))
+        history_header.add_widget(titles)
+        refresh_btn = mk_button("ATUALIZAR", NAVY_3, dp(40), 12, dp(110))
         refresh_btn.bind(on_release=lambda *_: self.refresh_history())
         history_header.add_widget(refresh_btn)
         right.add_widget(history_header)
@@ -525,17 +609,30 @@ class ApontamentoRoteiroApp(App):
         content.add_widget(right)
         root.add_widget(content)
 
-        self.op_input.bind(
-            on_text_validate=lambda *_: setattr(self.oper_input, "focus", True)
-        )
-        self.oper_input.bind(
-            on_text_validate=lambda *_: setattr(self.quant_input, "focus", True)
-        )
+        self.op_input.bind(on_text_validate=lambda *_: self.focus_field(self.oper_input, True))
+        self.oper_input.bind(on_text_validate=lambda *_: self.focus_field(self.quant_input, True))
         self.quant_input.bind(on_text_validate=self.on_apontar)
 
-        Clock.schedule_once(lambda *_: setattr(self.op_input, "focus", True), 0.5)
+        Clock.schedule_once(lambda *_: setattr(self.op_input, "focus", True), 0.45)
         Clock.schedule_once(lambda *_: self.refresh_history(), 0.2)
         return root
+
+    def focus_field(self, widget, show_keyboard=False):
+        for field in (self.op_input, self.oper_input, self.quant_input):
+            field.focus = False
+
+        def aplicar(*_):
+            widget.focus = True
+            try:
+                widget.cursor = (len(widget.text), 0)
+            except Exception:
+                pass
+            if show_keyboard:
+                Clock.schedule_once(lambda *_: force_android_keyboard(), 0.10)
+                Clock.schedule_once(lambda *_: force_android_keyboard(), 0.38)
+                Clock.schedule_once(lambda *_: force_android_keyboard(), 0.75)
+
+        Clock.schedule_once(aplicar, 0.06)
 
     def on_apontar(self, *_):
         if self.apontar_btn.disabled:
@@ -553,57 +650,69 @@ class ApontamentoRoteiroApp(App):
         self.set_busy(True, "ENVIANDO AO TOTVS...")
         threading.Thread(
             target=self.worker,
-            args=(op, operacao, quantidade, self.current_retry_id),
+            args=(op, operacao, quantidade),
             daemon=True,
         ).start()
 
-    def worker(self, op, operacao, quantidade, tentativa_de):
+    def worker(self, op, operacao, quantidade):
         result = apontar_totvs(op, operacao, quantidade)
-        try:
-            self.db.incluir(op, operacao, quantidade, result, tentativa_de)
-        except Exception as exc:
-            result = dict(result)
-            result["mensagem"] = (
-                result.get("mensagem", "")
-                + f"\nFalha ao salvar histórico local: {exc}"
-            )
+        if s(result.get("status")).upper() == "APONTADO":
+            try:
+                self.db.incluir_sucesso(op, operacao, quantidade, result)
+            except Exception as exc:
+                result = dict(result)
+                result["mensagem"] = (
+                    result.get("mensagem", "")
+                    + f"\nFalha ao salvar histórico local: {exc}"
+                )
         Clock.schedule_once(lambda _dt, res=result: self.finish(res), 0)
 
     def finish(self, result):
         self.set_busy(False)
         status = s(result.get("status", "ERRO")).upper()
         msg = result.get("mensagem", "")
-        color = status_color(status)
-
-        if status == "APONTADO":
-            self.status_label.text = "APONTAMENTO REALIZADO"
-            self.current_retry_id = None
-        elif status == "VERIFICAR":
-            self.status_label.text = "VERIFICAR NO TOTVS"
-        else:
-            self.status_label.text = "APONTAMENTO NÃO REALIZADO"
-
-        self.status_label.color = color
-        self.refresh_history()
         http = result.get("http_status")
-        self.popup(
-            status,
-            f"{msg}\n\nHTTP: {http if http is not None else '-'}",
-            color,
-        )
 
         if status == "APONTADO":
+            self.status_label.text = "✓  APONTAMENTO REALIZADO"
+            self.status_label.color = GREEN
+            self.refresh_history()
+            self.popup(
+                "APONTADO",
+                f"Apontamento realizado com sucesso.\n\n{msg}\n\nHTTP: {http if http is not None else '-'}",
+                GREEN,
+            )
             self.op_input.text = ""
             self.oper_input.text = ""
             self.quant_input.text = ""
-            Clock.schedule_once(lambda *_: setattr(self.op_input, "focus", True), 0.2)
+            self.focus_field(self.op_input, False)
+            return
+
+        if status == "VERIFICAR":
+            self.status_label.text = "!  VERIFICAR NO TOTVS"
+            self.status_label.color = AMBER
+            self.popup(
+                "VERIFICAR",
+                f"{msg}\n\nHTTP: {http if http is not None else '-'}",
+                AMBER,
+            )
+        else:
+            self.status_label.text = "✕  APONTAMENTO NÃO REALIZADO"
+            self.status_label.color = RED
+            self.popup(
+                "ERRO",
+                f"{msg}\n\nHTTP: {http if http is not None else '-'}",
+                RED,
+            )
+
+        self.focus_field(self.op_input, True)
 
     def set_busy(self, busy, text=None):
         self.apontar_btn.disabled = bool(busy)
         self.apontar_btn.text = "ENVIANDO..." if busy else "APONTAR AGORA"
         if text:
             self.status_label.text = text
-            self.status_label.color = NAVY_2
+            self.status_label.color = BLUE
 
     def refresh_history(self):
         self.history_box.clear_widgets()
@@ -613,18 +722,29 @@ class ApontamentoRoteiroApp(App):
                 orientation="vertical",
                 padding=dp(16),
                 size_hint_y=None,
-                height=dp(88),
-                bg=(0.97, 0.98, 0.99, 1),
-                radius=10,
+                height=dp(104),
+                bg=(0.965, 0.98, 0.995, 1),
+                border=(0.80, 0.88, 0.95, 1),
+                radius=12,
             )
             empty.add_widget(
                 mk_label(
-                    "Nenhum apontamento realizado neste tablet.",
+                    "Nenhum apontamento confirmado neste tablet.",
                     MUTED,
                     14,
                     False,
                     "center",
                     dp(58),
+                )
+            )
+            empty.add_widget(
+                mk_label(
+                    "Erros e tentativas não são gravados no histórico.",
+                    NAVY_3,
+                    12,
+                    True,
+                    "center",
+                    dp(25),
                 )
             )
             self.history_box.add_widget(empty)
@@ -634,32 +754,35 @@ class ApontamentoRoteiroApp(App):
             self.history_box.add_widget(self.make_history_item(row))
 
     def make_history_item(self, row):
-        status = s(row.get("status")).upper()
-        color = status_color(status)
         item = Card(
             orientation="horizontal",
-            padding=[dp(12), dp(8)],
+            padding=[0, dp(8), dp(10), dp(8)],
             spacing=dp(10),
             size_hint_y=None,
-            height=dp(88),
-            bg=(0.975, 0.982, 0.99, 1),
-            radius=10,
+            height=dp(92),
+            bg=(0.972, 0.985, 0.997, 1),
+            border=(0.78, 0.87, 0.95, 1),
+            radius=12,
         )
+
+        item.add_widget(Surface(size_hint_x=None, width=dp(7), bg=BLUE))
 
         info = BoxLayout(orientation="vertical", spacing=0)
         info.add_widget(
             mk_label(
-                f"{row.get('op', '')}   •   OP {row.get('operacao', '')}",
-                TEXT,
+                f"{row.get('op', '')}   •   OPERAÇÃO {row.get('operacao', '')}",
+                NAVY,
                 17,
                 True,
                 "left",
-                dp(30),
+                dp(31),
             )
         )
         qtd = row.get("quantidade", "")
         qtd_txt = f"{qtd:g}" if isinstance(qtd, (int, float)) else s(qtd)
-        info.add_widget(mk_label(f"Qtd. {qtd_txt}", MUTED, 13, False, "left", dp(23)))
+        info.add_widget(
+            mk_label(f"Quantidade apontada: {qtd_txt}", TEXT, 13, False, "left", dp(24))
+        )
         info.add_widget(
             mk_label(s(row.get("data_hora")), MUTED, 12, False, "left", dp(22))
         )
@@ -669,92 +792,17 @@ class ApontamentoRoteiroApp(App):
             orientation="vertical",
             spacing=dp(5),
             size_hint_x=None,
-            width=dp(150),
+            width=dp(136),
+            padding=[0, dp(4), 0, dp(4)],
         )
-        status_btn = mk_button(status, color, dp(35), 12, dp(150))
-        status_btn.bind(on_release=lambda *_args, r=row: self.show_details(r))
-        actions.add_widget(status_btn)
-
-        if status in ("ERRO", "VERIFICAR"):
-            retry_btn = mk_button("REAPONTAR", NAVY_2, dp(35), 12, dp(150))
-            retry_btn.bind(on_release=lambda *_args, r=row: self.retry_row(r))
-            actions.add_widget(retry_btn)
-        else:
-            detail_btn = mk_button("DETALHES", NAVY_2, dp(35), 12, dp(150))
-            detail_btn.bind(on_release=lambda *_args, r=row: self.show_details(r))
-            actions.add_widget(detail_btn)
-
+        ok_btn = mk_button("✓ APONTADO", GREEN, dp(34), 12, dp(136))
+        ok_btn.bind(on_release=lambda *_args, r=row: self.show_details(r))
+        actions.add_widget(ok_btn)
+        detail_btn = mk_button("DETALHES", NAVY_3, dp(34), 12, dp(136))
+        detail_btn.bind(on_release=lambda *_args, r=row: self.show_details(r))
+        actions.add_widget(detail_btn)
         item.add_widget(actions)
         return item
-
-    def retry_row(self, row):
-        status = s(row.get("status")).upper()
-
-        def preencher_e_focar():
-            self.op_input.text = s(row.get("op"))
-            self.oper_input.text = s(row.get("operacao"))
-            qtd = row.get("quantidade")
-            if isinstance(qtd, float) and qtd.is_integer():
-                qtd = int(qtd)
-            self.quant_input.text = s(qtd)
-            self.current_retry_id = row.get("id")
-            self.status_label.text = f"REAPONTAMENTO DO REGISTRO #{row.get('id')}"
-            self.status_label.color = NAVY_2
-            self.quant_input.focus = True
-
-        if status == "VERIFICAR":
-            self.confirmar_reapontamento(preencher_e_focar)
-        else:
-            preencher_e_focar()
-
-    def confirmar_reapontamento(self, callback):
-        modal = ModalView(
-            size_hint=(0.72, 0.62),
-            auto_dismiss=False,
-            background_color=(0, 0, 0, 0.5),
-        )
-        card = Card(
-            orientation="vertical",
-            padding=dp(22),
-            spacing=dp(12),
-            bg=CARD,
-            radius=16,
-        )
-        card.add_widget(
-            mk_label("CONFIRMAR REAPONTAMENTO", AMBER, 23, True, "center", dp(48))
-        )
-        card.add_widget(
-            mk_label(
-                "O apontamento anterior terminou com status VERIFICAR.\n"
-                "O POST pode ter chegado ao TOTVS mesmo sem resposta.\n\n"
-                "Confirme no TOTVS antes de enviar novamente.",
-                TEXT,
-                16,
-                False,
-                "center",
-                dp(118),
-            )
-        )
-        buttons = BoxLayout(
-            orientation="horizontal",
-            spacing=dp(12),
-            size_hint_y=None,
-            height=dp(58),
-        )
-        cancel = mk_button("CANCELAR", MUTED, dp(58), 16)
-        confirm = mk_button("REAPONTAR MESMO ASSIM", AMBER, dp(58), 15)
-        cancel.bind(on_release=lambda *_: modal.dismiss())
-
-        def confirmar(*_):
-            modal.dismiss()
-            callback()
-
-        confirm.bind(on_release=confirmar)
-        buttons.add_widget(cancel)
-        buttons.add_widget(confirm)
-        card.add_widget(buttons)
-        modal.add_widget(card)
-        modal.open()
 
     def show_details(self, row):
         text = (
@@ -769,20 +817,21 @@ class ApontamentoRoteiroApp(App):
             f"Payload:\n{s(row.get('payload_json')) or '-'}\n\n"
             f"Resposta:\n{s(row.get('resposta_json')) or '-'}"
         )
-        self.popup("DETALHES DO APONTAMENTO", text, NAVY_2, large=True)
+        self.popup("DETALHES DO APONTAMENTO", text, NAVY_3, large=True)
 
-    def popup(self, title, message, color=NAVY, large=False):
+    def popup(self, title, message, color=NAVY_2, large=False):
         modal = ModalView(
-            size_hint=(0.82, 0.82 if large else 0.58),
+            size_hint=(0.80, 0.80 if large else 0.58),
             auto_dismiss=False,
-            background_color=(0, 0, 0, 0.5),
+            background_color=(0, 0, 0, 0.62),
         )
         card = Card(
             orientation="vertical",
             padding=dp(22),
             spacing=dp(10),
             bg=CARD,
-            radius=16,
+            radius=18,
+            border=(0.68, 0.78, 0.88, 1),
         )
         card.add_widget(mk_label(title, color, 24, True, "center", dp(52)))
 
@@ -797,9 +846,7 @@ class ApontamentoRoteiroApp(App):
                 size_hint_y=None,
                 markup=False,
             )
-            body.bind(
-                width=lambda inst, *_: setattr(inst, "text_size", (inst.width, None))
-            )
+            body.bind(width=lambda inst, *_: setattr(inst, "text_size", (inst.width, None)))
             body.bind(
                 texture_size=lambda inst, value: setattr(inst, "height", value[1] + dp(20))
             )
@@ -808,8 +855,14 @@ class ApontamentoRoteiroApp(App):
         else:
             card.add_widget(mk_label(message, TEXT, 16, False, "center", dp(150)))
 
-        close = mk_button("FECHAR", NAVY, dp(58), 16)
-        close.bind(on_release=lambda *_: modal.dismiss())
+        close = mk_button("FECHAR", NAVY_2, dp(58), 16)
+
+        def fechar(*_):
+            modal.dismiss()
+            if self.op_input.focus or self.oper_input.focus or self.quant_input.focus:
+                Clock.schedule_once(lambda *_: force_android_keyboard(), 0.18)
+
+        close.bind(on_release=fechar)
         card.add_widget(close)
         modal.add_widget(card)
         modal.open()
