@@ -8,7 +8,7 @@ source.dir = .
 source.include_exts = py,kv,png,jpg,jpeg,json,txt,env,zpl,xml
 source.exclude_dirs = .git,.github,__pycache__,bin,.buildozer,venv
 
-version = 0.4.0
+version = 0.5.0
 
 # Nao fixe python3 em 3.11.x aqui.
 # O python-for-android deve manter python3 e hostpython3 na mesma versao.
