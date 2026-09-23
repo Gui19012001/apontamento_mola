@@ -50,6 +50,17 @@ TOTVS_TENANT_ID=env("TOTVS_TENANT_ID"); TOTVS_TIMEOUT=int(env("TOTVS_TIMEOUT","1
 
 def s(v): return "" if v is None else str(v).strip()
 def now_text(): return datetime.now().strftime("%d/%m/%Y %H:%M:%S")
+def now_api(): return datetime.now().strftime("%H:%M:%S")
+
+def hora_api_from_text(v):
+    txt=s(v)
+    if not txt: return now_api()
+    for fmt in ("%d/%m/%Y %H:%M:%S","%Y-%m-%d %H:%M:%S"):
+        try: return datetime.strptime(txt,fmt).strftime("%H:%M:%S")
+        except Exception: pass
+    m=re.search(r"(\d{2}:\d{2}:\d{2})",txt)
+    return m.group(1) if m else now_api()
+
 def normalizar_op(v): return re.sub(r"\s+","",s(v)).upper()
 
 def parse_operacao(v):
@@ -114,25 +125,64 @@ def force_android_keyboard():
             except Exception: pass
     except Exception: pass
 
-def apontar_totvs(op,operacao,quantidade):
+def apontar_totvs(op,operacao,quantidade,recurso,horaini,horafin):
     if not TOTVS_USERNAME or not TOTVS_PASSWORD:
         return {"status":"ERRO","http_status":None,"mensagem":"Credenciais TOTVS não configuradas.","payload":{},"body":None}
-    payload={"op":normalizar_op(op),"operac":int(operacao),"quant":quantidade,"lote":""}
+
+    recurso=s(recurso).upper()
+    if not recurso:
+        return {"status":"ERRO","http_status":None,"mensagem":"Recurso não informado.","payload":{},"body":None}
+
+    payload={
+        "op":normalizar_op(op),
+        "operacao":int(operacao),
+        "quant":quantidade,
+        "recurso":recurso,
+        "horaini":s(horaini),
+        "horafin":s(horafin),
+        "lotectl":""
+    }
+
     try:
-        resp=requests.post(f"{TOTVS_API_BASE}/new",json=payload,headers=api_headers(),
-                           auth=HTTPBasicAuth(TOTVS_USERNAME,TOTVS_PASSWORD),timeout=TOTVS_TIMEOUT)
+        resp=requests.post(
+            f"{TOTVS_API_BASE}/new",
+            json=payload,
+            headers=api_headers(),
+            auth=HTTPBasicAuth(TOTVS_USERNAME,TOTVS_PASSWORD),
+            timeout=TOTVS_TIMEOUT
+        )
         ok,msg,body=interpretar_post(resp)
-        return {"status":"APONTADO" if ok else "ERRO","http_status":resp.status_code,
-                "mensagem":msg,"payload":payload,"body":body}
+        return {
+            "status":"APONTADO" if ok else "ERRO",
+            "http_status":resp.status_code,
+            "mensagem":msg,
+            "payload":payload,
+            "body":body
+        }
     except requests.exceptions.Timeout:
-        return {"status":"VERIFICAR","http_status":None,
-                "mensagem":"A API não respondeu dentro do tempo limite. Confira no TOTVS antes de reapontar.",
-                "payload":payload,"body":None}
+        return {
+            "status":"VERIFICAR",
+            "http_status":None,
+            "mensagem":"A API não respondeu dentro do tempo limite. Confira no TOTVS antes de reapontar.",
+            "payload":payload,
+            "body":None
+        }
     except requests.exceptions.ConnectionError as exc:
-        return {"status":"ERRO","http_status":None,"mensagem":"Falha de conexão com a API TOTVS: "+s(exc),
-                "payload":payload,"body":None}
+        return {
+            "status":"ERRO",
+            "http_status":None,
+            "mensagem":"Falha de conexão com a API TOTVS: "+s(exc),
+            "payload":payload,
+            "body":None
+        }
     except Exception as exc:
-        return {"status":"ERRO","http_status":None,"mensagem":s(exc),"payload":payload,"body":None}
+        return {
+            "status":"ERRO",
+            "http_status":None,
+            "mensagem":s(exc),
+            "payload":payload,
+            "body":None
+        }
 
 class ProducaoDB:
     def __init__(self,path):
@@ -147,6 +197,7 @@ class ProducaoDB:
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 op TEXT NOT NULL,
                 operacao INTEGER NOT NULL,
+                recurso TEXT NOT NULL DEFAULT '',
                 planejado REAL NOT NULL,
                 produzido REAL NOT NULL DEFAULT 0,
                 status TEXT NOT NULL DEFAULT 'INICIADA',
@@ -161,6 +212,9 @@ class ProducaoDB:
                 ativo INTEGER NOT NULL DEFAULT 1,
                 atualizado_ts REAL
             )""")
+            cols={r[1] for r in c.execute("PRAGMA table_info(producoes)").fetchall()}
+            if "recurso" not in cols:
+                c.execute("ALTER TABLE producoes ADD COLUMN recurso TEXT NOT NULL DEFAULT ''")
             c.commit()
 
     def ativa(self):
@@ -168,14 +222,16 @@ class ProducaoDB:
             r=c.execute("SELECT * FROM producoes WHERE ativo=1 ORDER BY id DESC LIMIT 1").fetchone()
             return dict(r) if r else None
 
-    def iniciar(self,op,oper,planejado):
+    def iniciar(self,op,oper,recurso,planejado):
         if self.ativa(): raise ValueError("Já existe uma produção ativa. Conclua ou troque a OP.")
+        recurso=s(recurso).upper()
+        if not recurso: raise ValueError("Informe o recurso.")
         agora=now_text()
         with self.con() as c:
             cur=c.execute("""INSERT INTO producoes(
-                op,operacao,planejado,produzido,status,inicio,ultima_data,tentativas,ativo,atualizado_ts
-            ) VALUES(?,?,?,?,?,?,?,?,?,?)""",
-            (normalizar_op(op),int(oper),float(planejado),0.0,"INICIADA",agora,agora,0,1,time.time()))
+                op,operacao,recurso,planejado,produzido,status,inicio,ultima_data,tentativas,ativo,atualizado_ts
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?)""",
+            (normalizar_op(op),int(oper),recurso,float(planejado),0.0,"INICIADA",agora,agora,0,1,time.time()))
             c.commit(); return int(cur.lastrowid)
 
     def atualizar(self,pid,qtd,result):
@@ -292,7 +348,7 @@ class ApontamentoRoteiroApp(App):
                      padding=[dp(18),dp(4),dp(18),dp(4)],spacing=dp(8),bg=NAVY)
         brand=BoxLayout(orientation="vertical")
         brand.add_widget(label("IBERO",WHITE,26,True,"left",dp(30)))
-        brand.add_widget(label("MANUFATURA  •  APONTAMENTO POR OPERAÇÃO",(0.69,0.82,0.94,1),10,True,"left",dp(17)))
+        brand.add_widget(label("MANUFATURA  •  APONTAMENTO POR OPERAÇÃO / RECURSO",(0.69,0.82,0.94,1),10,True,"left",dp(17)))
         head.add_widget(brand)
         badge=Card(orientation="vertical",size_hint=(None,None),size=(dp(92),dp(33)),
                    padding=[dp(6),dp(1)],bg=NAVY3,radius=9,border=BLUE)
@@ -318,17 +374,25 @@ class ApontamentoRoteiroApp(App):
 
     def render_start(self):
         self.left.add_widget(label("INICIAR PRODUÇÃO",NAVY,19,True,"left",dp(26)))
-        self.left.add_widget(label("Bipe a OP, informe operação e planejado total.",MUTED,10,False,"left",dp(17)))
+        self.left.add_widget(label("Bipe a OP e informe operação, recurso e planejado.",MUTED,10,False,"left",dp(17)))
         flow=Card(orientation="horizontal",size_hint_y=None,height=dp(30),padding=[dp(6),0],
                   spacing=dp(2),bg=BLUE_SOFT,radius=8,border=(.80,.88,.96,1))
-        for txt in ("1 BIPAR OP","›","2 OPERAÇÃO","›","3 PLANEJADO"):
+        for txt in ("1 OP","›","2 OPERAÇÃO / RECURSO","›","3 PLANEJADO"):
             flow.add_widget(label(txt,BLUE if txt=="›" else NAVY2,13 if txt=="›" else 9,True,"center",dp(23)))
         self.left.add_widget(flow)
 
         self.op=inputbox("Bipe ou digite a OP")
         self.oper=inputbox("Ex.: 10","int","number")
+        self.recurso=inputbox("Ex.: PRE-02")
         self.planejado=inputbox("Ex.: 300",None,"number")
-        self.left.add_widget(field("OP",self.op)); self.left.add_widget(field("OPERAÇÃO",self.oper))
+
+        self.left.add_widget(field("OP",self.op))
+
+        row_or=BoxLayout(orientation="horizontal",size_hint_y=None,height=dp(63),spacing=dp(6))
+        row_or.add_widget(field("OPERAÇÃO",self.oper))
+        row_or.add_widget(field("RECURSO",self.recurso))
+        self.left.add_widget(row_or)
+
         self.left.add_widget(field("PLANEJADO TOTAL",self.planejado))
         self.start_btn=button("▶  INICIAR PRODUÇÃO",NAVY2,dp(49),15)
         self.start_btn.bind(on_release=self.on_start); self.left.add_widget(self.start_btn)
@@ -338,9 +402,10 @@ class ApontamentoRoteiroApp(App):
         c.add_widget(label("AGUARDANDO START",NAVY3,10,True,"center",dp(31))); self.left.add_widget(c)
 
         self.op.bind(on_text_validate=lambda *_: self.focus_start(self.oper,True))
-        self.oper.bind(on_text_validate=lambda *_: self.focus_start(self.planejado,True))
+        self.oper.bind(on_text_validate=lambda *_: self.focus_start(self.recurso,True))
+        self.recurso.bind(on_text_validate=lambda *_: self.focus_start(self.planejado,True))
         self.planejado.bind(on_text_validate=self.on_start)
-        for w in (self.op,self.oper,self.planejado): w.bind(focus=self._focus_changed)
+        for w in (self.op,self.oper,self.recurso,self.planejado): w.bind(focus=self._focus_changed)
         Clock.schedule_once(lambda *_: self.focus_start(self.op,False),.22)
 
     def render_active(self,a):
@@ -351,7 +416,7 @@ class ApontamentoRoteiroApp(App):
         top=Card(orientation="vertical",size_hint_y=None,height=dp(67),padding=[dp(10),dp(4)],
                  bg=(.965,.982,.997,1),radius=10,border=(.78,.87,.95,1))
         top.add_widget(label(a.get("op",""),NAVY,20,True,"left",dp(31)))
-        top.add_widget(label(f"OPERAÇÃO {a.get('operacao','')}  •  INÍCIO {a.get('inicio','')}",MUTED,9,True,"left",dp(21)))
+        top.add_widget(label(f"OPERAÇÃO {a.get('operacao','')}  •  RECURSO {a.get('recurso') or '-'}  •  INÍCIO {a.get('inicio','')}",MUTED,9,True,"left",dp(21)))
         self.left.add_widget(top)
 
         metrics=BoxLayout(orientation="horizontal",size_hint_y=None,height=dp(64),spacing=dp(5))
@@ -387,10 +452,12 @@ class ApontamentoRoteiroApp(App):
             op=normalizar_op(self.op.text)
             if not op: raise ValueError("Informe a OP.")
             oper=parse_operacao(self.oper.text)
+            recurso=s(self.recurso.text).upper()
+            if not recurso: raise ValueError("Informe o recurso.")
             plan=parse_qtd(self.planejado.text,"quantidade planejada")
-            self.db.iniciar(op,oper,plan)
+            self.db.iniciar(op,oper,recurso,plan)
             self.render_left(); self.refresh_history()
-            self.popup("PRODUÇÃO INICIADA",f"OP {op}\nOperação {oper}\nPlanejado total: {fmt_num(plan)}",GREEN)
+            self.popup("PRODUÇÃO INICIADA",f"OP {op}\nOperação {oper}\nRecurso {recurso}\nPlanejado total: {fmt_num(plan)}",GREEN)
         except Exception as exc:
             self.popup("VALIDAÇÃO",s(exc),RED)
 
@@ -399,14 +466,26 @@ class ApontamentoRoteiroApp(App):
         if not a:
             self.popup("SEM PRODUÇÃO ATIVA","Inicie uma OP antes de apontar.",RED); return
         if self.send.disabled: return
-        try: qtd=parse_qtd(self.qtd.text)
+        try:
+            qtd=parse_qtd(self.qtd.text)
+            recurso=s(a.get("recurso")).upper()
+            if not recurso:
+                raise ValueError("Esta produção foi iniciada em uma versão antiga sem recurso. Troque/reinicie a OP informando o recurso.")
         except Exception as exc:
             self.popup("VALIDAÇÃO",s(exc),RED); return
-        self.set_busy(True,"ENVIANDO AO TOTVS...")
-        threading.Thread(target=self.worker,args=(int(a["id"]),a["op"],int(a["operacao"]),qtd),daemon=True).start()
 
-    def worker(self,pid,op,oper,qtd):
-        result=apontar_totvs(op,oper,qtd)
+        horaini=hora_api_from_text(a.get("inicio"))
+        horafin=now_api()
+
+        self.set_busy(True,"ENVIANDO AO TOTVS...")
+        threading.Thread(
+            target=self.worker,
+            args=(int(a["id"]),a["op"],int(a["operacao"]),qtd,recurso,horaini,horafin),
+            daemon=True
+        ).start()
+
+    def worker(self,pid,op,oper,qtd,recurso,horaini,horafin):
+        result=apontar_totvs(op,oper,qtd,recurso,horaini,horafin)
         try: result["producao"]=self.db.atualizar(pid,qtd,result)
         except Exception as exc: result["mensagem"]=result.get("mensagem","")+f"\nFalha ao atualizar histórico local: {exc}"
         Clock.schedule_once(lambda _dt,res=result:self.finish(res),0)
@@ -453,7 +532,7 @@ class ApontamentoRoteiroApp(App):
 
     def focus_start(self,w,show_keyboard=False):
         self._focusing=True
-        for x in (self.op,self.oper,self.planejado):
+        for x in (self.op,self.oper,self.recurso,self.planejado):
             if x is not w: x.focus=False
         def go(_dt):
             w.focus=True
@@ -502,7 +581,7 @@ class ApontamentoRoteiroApp(App):
                   size_hint_y=None,height=dp(108),bg=(.977,.988,.998,1),radius=10,border=(.83,.90,.95,1))
         item.add_widget(Surface(size_hint_x=None,width=dp(6),bg=color))
         info=BoxLayout(orientation="vertical")
-        info.add_widget(label(f"{r.get('op','')}   •   OPERAÇÃO {r.get('operacao','')}",NAVY,14,True,"left",dp(24)))
+        info.add_widget(label(f"{r.get('op','')}   •   OPERAÇÃO {r.get('operacao','')}   •   {r.get('recurso') or '-'}",NAVY,14,True,"left",dp(24)))
         qtyrow=BoxLayout(orientation="horizontal",size_hint_y=None,height=dp(36))
         qtyrow.add_widget(label(f"{fmt_num(prod)} / {fmt_num(plan)}",GREEN if saldo<=0 else NAVY2,17,True,"left",dp(33)))
         qtyrow.add_widget(label(f"FALTA {fmt_num(saldo)}",BLUE if saldo>0 else GREEN,14,True,"right",dp(33)))
@@ -518,7 +597,7 @@ class ApontamentoRoteiroApp(App):
 
     def show_details(self,r):
         plan=float(r.get("planejado") or 0); prod=float(r.get("produzido") or 0); saldo=max(plan-prod,0)
-        txt=(f"ID: {r.get('id')}\nOP: {r.get('op')}\nOperação: {r.get('operacao')}\n\n"
+        txt=(f"ID: {r.get('id')}\nOP: {r.get('op')}\nOperação: {r.get('operacao')}\nRecurso: {r.get('recurso') or '-'}\n\n"
              f"Planejado: {fmt_num(plan)}\nProduzido acumulado: {fmt_num(prod)}\nSaldo: {fmt_num(saldo)}\n\n"
              f"Status atual: {r.get('status')}\nInício: {r.get('inicio')}\nÚltima atualização: {r.get('ultima_data')}\n"
              f"Fim: {r.get('fim') or '-'}\nEnvios realizados: {r.get('tentativas') or 0}\nHTTP: {r.get('http_status') or '-'}\n\n"
