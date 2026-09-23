@@ -52,14 +52,16 @@ def s(v): return "" if v is None else str(v).strip()
 def now_text(): return datetime.now().strftime("%d/%m/%Y %H:%M:%S")
 def now_api(): return datetime.now().strftime("%H:%M:%S")
 
-def hora_api_from_text(v):
+def parse_hora_manual(v,nome):
     txt=s(v)
-    if not txt: return now_api()
-    for fmt in ("%d/%m/%Y %H:%M:%S","%Y-%m-%d %H:%M:%S"):
-        try: return datetime.strptime(txt,fmt).strftime("%H:%M:%S")
-        except Exception: pass
-    m=re.search(r"(\d{2}:\d{2}:\d{2})",txt)
-    return m.group(1) if m else now_api()
+    if not txt:
+        raise ValueError(f"Informe a {nome}.")
+    for fmt in ("%H:%M:%S","%H:%M"):
+        try:
+            return datetime.strptime(txt,fmt).strftime("%H:%M:%S")
+        except Exception:
+            pass
+    raise ValueError(f"{nome.capitalize()} inválida. Use HH:MM ou HH:MM:SS.")
 
 def normalizar_op(v): return re.sub(r"\s+","",s(v)).upper()
 
@@ -413,25 +415,35 @@ class ApontamentoRoteiroApp(App):
         saldo=max(plan-prod,0); pct=0 if plan<=0 else min(prod/plan*100,100)
 
         self.left.add_widget(label("PRODUÇÃO ATIVA",NAVY,18,True,"left",dp(25)))
-        top=Card(orientation="vertical",size_hint_y=None,height=dp(67),padding=[dp(10),dp(4)],
+        self.left.add_widget(label("Informe quantidade, hora início e hora fim manualmente em cada apontamento.",MUTED,9,False,"left",dp(17)))
+        top=Card(orientation="vertical",size_hint_y=None,height=dp(60),padding=[dp(10),dp(3)],
                  bg=(.965,.982,.997,1),radius=10,border=(.78,.87,.95,1))
         top.add_widget(label(a.get("op",""),NAVY,20,True,"left",dp(31)))
         top.add_widget(label(f"OPERAÇÃO {a.get('operacao','')}  •  RECURSO {a.get('recurso') or '-'}  •  INÍCIO {a.get('inicio','')}",MUTED,9,True,"left",dp(21)))
         self.left.add_widget(top)
 
-        metrics=BoxLayout(orientation="horizontal",size_hint_y=None,height=dp(64),spacing=dp(5))
+        metrics=BoxLayout(orientation="horizontal",size_hint_y=None,height=dp(58),spacing=dp(5))
         for title,value,color in (("PLANEJADO",fmt_num(plan),NAVY2),("APONTADO",fmt_num(prod),GREEN),("FALTA",fmt_num(saldo),BLUE)):
             c=Card(orientation="vertical",padding=[dp(7),dp(2)],bg=(.98,.987,.995,1),radius=9,border=(.84,.89,.94,1))
             c.add_widget(label(title,MUTED,8,True,"center",dp(18)))
             c.add_widget(label(value,color,18,True,"center",dp(35))); metrics.add_widget(c)
         self.left.add_widget(metrics)
 
-        pbox=BoxLayout(orientation="vertical",size_hint_y=None,height=dp(43),spacing=dp(2))
+        pbox=BoxLayout(orientation="vertical",size_hint_y=None,height=dp(34),spacing=dp(2))
         pbox.add_widget(label(f"{pct:.0f}% CONCLUÍDO",NAVY3,9,True,"left",dp(16)))
         pbox.add_widget(ProgressBar(max=100,value=pct,size_hint_y=None,height=dp(14))); self.left.add_widget(pbox)
 
         self.qtd=inputbox("Quantidade produzida agora",None,"number",dp(46))
-        self.left.add_widget(field("QUANTIDADE DESTE APONTAMENTO",self.qtd,dp(65)))
+        self.horaini=inputbox("Ex.: 08:15","int","number",dp(46))
+        self.horafin=inputbox("Ex.: 09:00","int","number",dp(46))
+
+        self.left.add_widget(field("QUANTIDADE DESTE APONTAMENTO",self.qtd,dp(58)))
+
+        horas=BoxLayout(orientation="horizontal",size_hint_y=None,height=dp(58),spacing=dp(6))
+        horas.add_widget(field("HORA INÍCIO",self.horaini,dp(58)))
+        horas.add_widget(field("HORA FIM",self.horafin,dp(58)))
+        self.left.add_widget(horas)
+
         self.send=button("APONTAR E SOMAR",NAVY2,dp(49),15); self.send.bind(on_release=self.on_apontar)
         self.left.add_widget(self.send)
 
@@ -444,8 +456,14 @@ class ApontamentoRoteiroApp(App):
         troca=button("TROCAR OP",MUTED,dp(39),9,dp(82)); troca.bind(on_release=self.confirm_swap); controls.add_widget(troca)
         self.left.add_widget(controls)
 
-        self.qtd.bind(on_text_validate=self.on_apontar); self.qtd.bind(focus=self._focus_changed)
-        Clock.schedule_once(lambda *_: self.focus_qty(True),.22)
+        self.qtd.bind(on_text_validate=lambda *_: self.focus_active_field(self.horaini,True))
+        self.horaini.bind(on_text_validate=lambda *_: self.focus_active_field(self.horafin,True))
+        self.horafin.bind(on_text_validate=self.on_apontar)
+
+        for w in (self.qtd,self.horaini,self.horafin):
+            w.bind(focus=self._focus_changed)
+
+        Clock.schedule_once(lambda *_: self.focus_active_field(self.qtd,True),.22)
 
     def on_start(self,*_):
         try:
@@ -471,11 +489,11 @@ class ApontamentoRoteiroApp(App):
             recurso=s(a.get("recurso")).upper()
             if not recurso:
                 raise ValueError("Esta produção foi iniciada em uma versão antiga sem recurso. Troque/reinicie a OP informando o recurso.")
+
+            horaini=parse_hora_manual(self.horaini.text,"hora de início")
+            horafin=parse_hora_manual(self.horafin.text,"hora de fim")
         except Exception as exc:
             self.popup("VALIDAÇÃO",s(exc),RED); return
-
-        horaini=hora_api_from_text(a.get("inicio"))
-        horafin=now_api()
 
         self.set_busy(True,"ENVIANDO AO TOTVS...")
         threading.Thread(
@@ -542,16 +560,30 @@ class ApontamentoRoteiroApp(App):
             if show_keyboard: Clock.schedule_once(lambda *_: force_android_keyboard(),.18)
         Clock.schedule_once(go,.10)
 
-    def focus_qty(self,show_keyboard=True):
-        if not hasattr(self,"qtd"): return
+    def focus_active_field(self,w,show_keyboard=True):
+        if w is None: return
         self._focusing=True
+
+        for x in (getattr(self,"qtd",None),getattr(self,"horaini",None),getattr(self,"horafin",None)):
+            if x is not None and x is not w:
+                x.focus=False
+
         def go(_dt):
-            self.qtd.focus=True
-            try: self.qtd.cursor=(len(self.qtd.text),0); self.qtd._ensure_keyboard()
-            except Exception: pass
+            w.focus=True
+            try:
+                w.cursor=(len(w.text),0)
+                w._ensure_keyboard()
+            except Exception:
+                pass
             self._focusing=False
-            if show_keyboard: Clock.schedule_once(lambda *_: force_android_keyboard(),.18)
+            if show_keyboard:
+                Clock.schedule_once(lambda *_: force_android_keyboard(),.18)
+
         Clock.schedule_once(go,.08)
+
+    def focus_qty(self,show_keyboard=True):
+        if hasattr(self,"qtd"):
+            self.focus_active_field(self.qtd,show_keyboard)
 
     def build_history_panel(self):
         hh=BoxLayout(orientation="horizontal",size_hint_y=None,height=dp(45),spacing=dp(6))
