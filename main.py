@@ -56,12 +56,23 @@ def parse_hora_manual(v,nome):
     txt=s(v)
     if not txt:
         raise ValueError(f"Informe a {nome}.")
+
+    # No tablet o teclado numérico é mais prático:
+    # 0815 -> 08:15:00
+    # 081530 -> 08:15:30
+    digits=re.sub(r"\D","",txt)
+    if len(digits)==4:
+        txt=f"{digits[0:2]}:{digits[2:4]}"
+    elif len(digits)==6:
+        txt=f"{digits[0:2]}:{digits[2:4]}:{digits[4:6]}"
+
     for fmt in ("%H:%M:%S","%H:%M"):
         try:
             return datetime.strptime(txt,fmt).strftime("%H:%M:%S")
         except Exception:
             pass
-    raise ValueError(f"{nome.capitalize()} inválida. Use HH:MM ou HH:MM:SS.")
+
+    raise ValueError(f"{nome.capitalize()} inválida. Digite HHMM, por exemplo 0815.")
 
 def normalizar_op(v): return re.sub(r"\s+","",s(v)).upper()
 
@@ -434,8 +445,8 @@ class ApontamentoRoteiroApp(App):
         pbox.add_widget(ProgressBar(max=100,value=pct,size_hint_y=None,height=dp(14))); self.left.add_widget(pbox)
 
         self.qtd=inputbox("Quantidade produzida agora",None,"number",dp(46))
-        self.horaini=inputbox("Ex.: 08:15","int","number",dp(46))
-        self.horafin=inputbox("Ex.: 09:00","int","number",dp(46))
+        self.horaini=inputbox("Ex.: 0815","int","number",dp(46))
+        self.horafin=inputbox("Ex.: 0900","int","number",dp(46))
 
         self.left.add_widget(field("QUANTIDADE DESTE APONTAMENTO",self.qtd,dp(58)))
 
